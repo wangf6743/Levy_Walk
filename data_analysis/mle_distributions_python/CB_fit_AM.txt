@@ -1,0 +1,153 @@
+# This is R-code for fitting distributions and calculating AIC weights in movement data analysis used in
+
+#   Jansen V AA, Mashanova A, Petrovskii S 2012 Comment on “Lévy Walks Evolve
+#       Through Interaction Between Movement and Environmental Complexity”
+#       Science 335, 918
+
+# If you use this code, please, cite the above paper.
+
+# Function 'am.fit' takes in a vector with the step length data and starting values 
+# and returns the best-fit parameters and maximum log-likelihoods for fitted exponential 
+# (Brownian motion), power law (Levy walk), truncated power law (truncated Levy walk)
+# and hyperexponential (sum of exponentials, composite Brownian) distributions. 
+# All distributions are left truncated at the minimal data value.
+# For the truncated power law the right truncation is set at the maximum data value.
+
+# If you read the data from .csv file I advise you to convert the data into a vector form -
+# e.g. if you have 1 column only (no column name) then use
+data<-read.csv("yourfile.csv",header=F)[,1]
+
+# A Mashanova 12 Feb 2013 
+# modified 29 June 2013 to accomodate a variety of data sets
+# correction 26 May 2015
+# code for plotting data with the fitted distributions added 31 August 2015
+
+# starting values for composite Brownian (appropriate for mussel data)
+start.cb<-list(cb2=c(p=0.05,lb=c(0.1,1)),cb3=c(p=c(0.05,0.1),lb=c(0.1,1,3)),
+           cb4=c(p=c(0.01,0.05,0.1),lb=c(0.6,0.1,1,3)))
+
+# if you work with GPS data this set of starting values might be more useful
+start.cb<-list(cb2=c(p=0.1,lb=c(0.1,0.01)),cb3=c(p=c(0.1,0.1),lb=c(0.1,0.01,0.001)),
+             cb4=c(p=c(0.1,0.1,0.1),lb=c(0.1,0.1,0.01,0.001)))
+
+# these GPS starting values were used in
+#   Venter J A, Prins H HT, Mashanova A, de Boer W F, Slotow R 2015
+#      Intrinsic and extrinsic factors influencing large African herbivore movements 
+#      Ecological Informatics DOI: 10.1016/j.ecoinf.2015.05.006
+
+am.fit<-function(data,start)
+ {
+   Exp.ml<-function(lb,set) length(set)*(log(lb)+lb*min(set))-lb*sum(set)
+   PL.ml<-function(mu,set) length(set)*(log(mu-1)- log(min(set)^(1-mu)))-mu*sum(log(set))
+   TPL.ml<-function(mu,set) length(set)*(log(mu-1)- log( (min(set))^(1-mu) - (max(set))^(1-mu) ))-
+                   mu*sum(log(set))
+   CB.pdf<-function(x,p,lb,k,lower)
+   { pv<-numeric(k-1); for (i in 1:(k-1)) pv[i]<-exp(p[i])/(1+sum(exp(p)))
+     lbv<-exp(lb)    
+     res=(1-sum(pv))*lbv[k]*exp(lbv[k]*lower)*exp(-lbv[k]*x)
+     for (j in 1:(k-1)) res=(res+pv[j]*lbv[j]*exp(lbv[j]*lower)*exp(-lbv[j]*x))
+     return(res)
+   }
+   CB2.ml<-function(x,set) sum(log(CB.pdf(set,x[1],c(x[2],x[3]),2,min(set))))
+   CB3.ml<-function(x,set) sum(log(CB.pdf(set,c(x[1],x[2]),c(x[3],x[4],x[5]),3,min(set))))
+   CB4.ml<-function(x,set) sum(log(CB.pdf(set,c(x[1],x[2],x[3]),c(x[4],x[5],x[6],x[7]),4,min(set))))  
+   p.tr<-function(k) sapply(1:k,function(x) log(temp[x]/(1-sum(temp[1:k]))))     
+   temp<-start$cb2; s.cb2<-c(p.tr(1),log(temp[2:3]))      
+   temp<-start$cb3; s.cb3<-c(p.tr(2),log(temp[3:5]))
+   temp<-start$cb4; s.cb4<-c(p.tr(3),log(temp[4:7]))
+   back.tr<-function(x) exp(x)/(1+sum(exp(x)))                  
+   exp.best<-function(set) 1/(sum(set)/length(set)-min(set))
+   pl.best<-function(set) 1-length(set)/(length(set)*log(min(set))-sum(log(set)))   
+   lb<-exp.best(data);par<-list(lb); ml<-Exp.ml(lb,data)          
+   mu<-pl.best(data);par<-c(par,mu); ml<-c(ml,PL.ml(mu,data))     
+   TPL.f<-function(mu) TPL.ml(mu,set=data)
+   tpl<-optimize(TPL.f,lower=1.1,upper=3,maximum=T)          
+   par<-c(par,tpl$maximum); ml<-c(ml,tpl$objective)
+   CB2.f<-function(x) CB2.ml(x,set=data)                     
+   cb2<-optim(s.cb2,CB2.f,control=list(fnscale=-1))
+   p<-back.tr(cb2$par[1])                       
+   par<-c(par,list(c(p,exp(cb2$par[2:3])))); ml<-c(ml,cb2$value)
+   CB3.f<-function(x) CB3.ml(x,set=data)
+   cb3<-optim(s.cb3,CB3.f,control=list(fnscale=-1)) 
+   p<-back.tr(cb3$par[1:2])
+   par<-c(par,list(c(p,exp(cb3$par[3:5]))));ml<-c(ml,cb3$value)
+   CB4.f<-function(x) CB4.ml(x,set=data)
+   cb4<-optim(s.cb4,CB4.f,control=list(fnscale=-1))
+   p<-back.tr(cb4$par[1:3])
+   par<-c(par,list(c(p,exp(cb4$par[4:7]))));ml<-c(ml,cb4$value)
+   return(c(par,list(ml)))
+ }
+res<-am.fit(data,start.cb)
+
+# 'descript' prints the result on the screen in a more explanatory form
+descript<-function(dat)
+{ print(paste("exp: lb =",round(dat[[1]],3),", MLL =",round(dat[[7]][1],3)))
+  print(paste("power law: mu =",round(dat[[2]],3),", MLL = ",round(dat[[7]][2],3)))
+  print(paste("truncated power law: mu =",round(dat[[3]],3),", MLL = ",round(dat[[7]][3],3)))
+  print(paste("2 exp: p1 =",round(dat[[4]][1],3),"lb1 =",round(dat[[4]][2],3)))
+  print(paste("       lb2 =",round(dat[[4]][3],3),", MLL = ",round(dat[[7]][4],3)))
+  print(paste("3 exp: p1 =",round(dat[[5]][1],3),"lb1 =",round(dat[[5]][3],3)))
+  print(paste("       p2 =",round(dat[[5]][2],3),"lb2 =",round(dat[[5]][4],3)))
+  print(paste("       lb3 =",round(dat[[5]][5],3),", MLL = ",round(dat[[7]][5],3)))
+  print(paste("4 exp: p1 =",round(dat[[6]][1],3),"lb1 =",round(dat[[6]][4],3)))
+  print(paste("       p2 =",round(dat[[6]][2],3),"lb2 =",round(dat[[6]][5],3)))
+  print(paste("       p3 =",round(dat[[6]][3],3),"lb3 =",round(dat[[6]][6],3)))
+  print(paste("       lb4 =",round(dat[[6]][7],3),", MLL = ",round(dat[[7]][6],3)))
+}
+descript(res)
+
+# AIC weights
+AIC.weights<-function(MLL,k=c(1,1,1,3,5,7))
+ {  
+    AIC<-(-2*MLL+2*k)
+    min.AIC<-min(AIC); diff<-AIC-min.AIC
+    sum.d<-sum(exp(-diff/2))
+    AIC.w<-numeric(length(MLL))
+    for (i in 1:length(MLL)) AIC.w[i]<-round(exp(-diff[i]/2)/sum(exp(-diff/2)),4)
+    return(cbind(MLL,AIC,AIC.w))
+  }
+AIC.weights(res[[7]])
+
+# plotting graphs
+# cumulative distributions
+cum.d<-function(n) n:1/n
+cum.Exp<-function(lb,x,set)  exp(-lb*(x-min(set)))
+cum.PL<-function(mu,x,set) (min(set)/x)^(mu-1)
+cum.TPL<-function(mu,x,set) 1-(min(set)^(1-mu)-x^(1-mu))/(min(set)^(1-mu)-max(set)^(1-mu))
+cum.CB2<-function(p,x,set)    p[1]*exp(-p[2]*x)/exp(-p[2]*min(set))+
+     (1-p[1])*exp(-p[3]*x)/exp(-p[3]*min(set))
+cum.CB3<-function(p,x,set)    p[1]*exp(-p[3]*x)/exp(-p[3]*min(set))+
+     p[2]*exp(-p[4]*x)/exp(-p[4]*min(set))+(1-p[1]-p[2])*exp(-p[5]*x)/exp(-p[5]*min(set))
+cum.CB4<-function(p,x,set)    p[1]*exp(-p[4]*x)/exp(-p[4]*min(set))+
+     p[2]*exp(-p[5]*x)/exp(-p[5]*min(set)) + p[3]*exp(-p[6]*x)/exp(-p[6]*min(set))+
+     (1-p[1]-p[2]-p[3])*exp(-p[7]*x)/exp(-p[7]*min(set))
+
+# to plot all 6 distributions using different colours
+plot(sort(data),cum.d(length(data)),log="xy",type="p",
+     xlab="step length",ylab="inverse cumulative frequency")
+curve(cum.Exp(res[[1]],x,data),add=T,lwd=2,col="red")       # exponential
+curve(cum.PL(res[[2]],x,data),add=T,lwd=2,col="green")      # power law
+curve(cum.TPL(res[[3]],x,data),add=T,lwd=2,col="blue")      # truncated power law
+curve(cum.CB2(res[[4]],x,data),add=T,lwd=2,col="cyan")      # composite brownian with 2 exponentials
+curve(cum.CB3(res[[5]],x,data),add=T,lwd=2,col="magenta")   # composite brownian with 3 exponentials
+curve(cum.CB4(res[[6]],x,data),add=T,lwd=2,col="orange")    # composite brownian with 4 exponentials
+
+# alternatively execute only the lines for plotting distributions 
+# you want to be on the graph
+
+
+# Comments on the fitting process
+# Proportions of exponentials are transformed as x=log(p/(1-sum(p)))
+# to ensure that the fitted values are between 0 and 1 (Bolker 2008).
+# The back transform is p=exp(x)/(1+sum(exp(x)) were x and p are vectors.
+
+# Parameters of exponential distributions are log-transformed 
+# to ensure positive values.
+
+# Bolker B.M. (2008) Ecological models and data in R. Princeton University
+# Press, Princeton.
+
+# Ihaka R.& Gentleman R. 1996 R:  a  language  for  data
+# analysis and graphics. J. Comput. Graph. Stat. 5, 299–314.
+
+
